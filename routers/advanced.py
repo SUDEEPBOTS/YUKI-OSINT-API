@@ -646,20 +646,160 @@ async def ip_range_calculator(cidr: str):
 @router.get("/uuid")
 async def uuid_generator(count: int = 1):
     """Generate UUID(s)"""
-    if count > 100:
-        count = 100
-    if count < 1:
-        count = 1
-    
+    if count > 100: count = 100
+    if count < 1: count = 1
     uuids = []
     for _ in range(count):
-        uuids.append({
-            "uuid4": str(uuid.uuid4()),
-            "uuid4_hex": uuid.uuid4().hex
-        })
+        uuids.append({"uuid4": str(uuid.uuid4()), "uuid4_hex": uuid.uuid4().hex})
+    return {"status": "success", "count": count, "uuids": uuids}
+
+# ─── Website Hosting Detector ───
+PLATFORM_SIGNATURES = {
+    "cloudflare": ["cloudflare", "cf-ray", "__cfduid", "cf-request-id"],
+    "railway": ["up.railway.app", "railway.app"],
+    "vercel": ["vercel.app", "x-vercel-id", "vercel"],
+    "netlify": ["netlify.com", "netlify.app", "x-nf-request-id"],
+    "heroku": ["herokuapp.com", "heroku-router"],
+    "aws": ["cloudfront.net", "aws", "amazonaws.com", "x-amz-", "AWSALB"],
+    "google_cloud": ["google", "gcp", "appspot.com", "googleapis.com"],
+    "azure": ["azure.com", "azurewebsites.net", "x-azure-"],
+    "digitalocean": ["digitalocean.com", "do-"],
+    "github_pages": ["github.com", "github.io"],
+    "nginx": ["nginx", "nginx-reuseport"],
+    "apache": ["apache", "Apache"],
+    "cloudflare_tunnel": ["cfargotunnel.com"],
+    "ngrok": ["ngrok.io", "ngrok-free.app", "ngrok-agent"],
+    "fly_io": ["fly.io", "fly.dev"],
+    "render": ["render.com", "onrender.com"],
+    "python_anywhere": ["pythonanywhere.com"],
+}
+
+@router.get("/detect")
+async def detect_hosting(url: str = None, domain: str = None):
+    """Detect website hosting platform. Provide 'url' (full URL) or 'domain'."""
+    target = url or domain
+    if not target:
+        return {"status": "error", "message": "Provide 'url' or 'domain' parameter"}
     
-    return {
-        "status": "success",
-        "count": count,
-        "uuids": uuids
-    }
+    if not target.startswith("http"):
+        target = "https://" + target
+    
+    try:
+        import ssl, socket
+        from urllib.parse import urlparse
+        
+        parsed = urlparse(target)
+        hostname = parsed.hostname or ""
+        
+        result = {
+            "target": target,
+            "domain": hostname,
+            "ip": None,
+            "asn_org": None,
+            "cname": [],
+            "platform": None,
+            "confidence": 0,
+            "evidence": [],
+            "headers": {},
+            "detected": []
+        }
+        
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False, verify=False) as client:
+            try:
+                resp = await client.get(target, headers={"User-Agent": "Mozilla/5.0 (compatible; YUKI-OSINT/1.0)"})
+                result["status_code"] = resp.status_code
+                result["headers"] = dict(resp.headers)
+                
+                # Check headers for platform signatures
+                h_text = str(dict(resp.headers)).lower()
+                for platform, sigs in PLATFORM_SIGNATURES.items():
+                    matches = []
+                    for sig in sigs:
+                        if sig.lower() in h_text or sig.lower() in hostname:
+                            matches.append(sig)
+                    if matches:
+                        result["detected"].append({"platform": platform, "signatures": matches})
+                
+            except Exception as e:
+                result["header_error"] = str(e)
+        
+        # DNS CNAME check
+        try:
+            import dns.resolver
+            for rtype in ['CNAME', 'A']:
+                try:
+                    answers = dns.resolver.resolve(hostname, rtype)
+                    for ans in answers:
+                        val = str(ans).lower()
+                        result["cname"].append(val)
+                        for platform, sigs in PLATFORM_SIGNATURES.items():
+                            for sig in sigs:
+                                if sig in val:
+                                    result["detected"].append({"platform": platform, "signatures": [sig + " (DNS)"]})
+                except:
+                    pass
+        except:
+            pass
+        
+        # IP based detection
+        try:
+            import socket
+            ip = socket.gethostbyname(hostname)
+            result["ip"] = ip
+            
+            # ASN lookup
+            async with httpx.AsyncClient(timeout=8) as client:
+                ip_resp = await client.get(f"https://ipapi.co/{ip}/json/")
+                if ip_resp.status_code == 200:
+                    ip_data = ip_resp.json()
+                    result["asn_org"] = ip_data.get("org")
+                    result["ip_city"] = ip_data.get("city")
+                    result["ip_country"] = ip_data.get("country_name")
+                    
+                    # Infer platform from ASN
+                    org = (ip_data.get("org") or "").lower()
+                    if "cloudflare" in org:
+                        if not any(d["platform"] == "cloudflare" for d in result["detected"]):
+                            result["detected"].append({"platform": "cloudflare", "signatures": [f"ASN: {org}"]})
+                    if "google" in org or "gcp" in org:
+                        if not any(d["platform"] in ("google_cloud", "railway") for d in result["detected"]):
+                            result["detected"].append({"platform": "google_cloud", "signatures": [f"ASN: {org}"]})
+                    if "amazon" in org or "aws" in org:
+                        if not any(d["platform"] == "aws" for d in result["detected"]):
+                            result["detected"].append({"platform": "aws", "signatures": [f"ASN: {org}"]})
+                    if "digitalocean" in org:
+                        if not any(d["platform"] == "digitalocean" for d in result["detected"]):
+                            result["detected"].append({"platform": "digitalocean", "signatures": [f"ASN: {org}"]})
+        except:
+            pass
+        
+        # Determine best platform match
+        if result["detected"]:
+            # Remove duplicates
+            seen = set()
+            unique = []
+            for d in result["detected"]:
+                if d["platform"] not in seen:
+                    seen.add(d["platform"])
+                    unique.append(d)
+            result["detected"] = unique
+            
+            # Pick highest confidence
+            platform_priority = [
+                "railway", "vercel", "cloudflare_tunnel", "cloudflare",
+                "github_pages", "netlify", "heroku", "aws", "google_cloud",
+                "azure", "digitalocean", "ngrok", "fly_io", "render"
+            ]
+            for p in platform_priority:
+                if any(d["platform"] == p for d in unique):
+                    result["platform"] = p
+                    break
+            if not result["platform"]:
+                result["platform"] = unique[0]["platform"]
+            
+            result["confidence"] = len(result["detected"])
+        
+        return {"status": "success", "data": result}
+    
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
