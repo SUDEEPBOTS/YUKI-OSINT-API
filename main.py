@@ -27,6 +27,7 @@ from routers.finance import router as finance_router
 from routers.osint import router as osint_router
 from routers.india import router as india_router
 from routers.utils import router as utils_router
+from routers.advanced import router as advanced_router
 
 app.include_router(vehicle_router, prefix="/api", tags=["🚗 Vehicle"])
 app.include_router(identity_router, prefix="/api", tags=["🆔 Identity"])
@@ -34,6 +35,7 @@ app.include_router(finance_router, prefix="/api", tags=["💳 Finance"])
 app.include_router(osint_router, prefix="/api", tags=["🌐 OSINT"])
 app.include_router(india_router, prefix="/api", tags=["🇮🇳 India"])
 app.include_router(utils_router, prefix="/api", tags=["🔧 Utilities"])
+app.include_router(advanced_router, prefix="/api", tags=["🚀 Advanced"])
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -116,7 +118,7 @@ body{background:#0a0a0f;color:#e0e0e0;font-family:'Segoe UI',sans-serif;min-heig
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "2.0.0", "endpoints": 25}
+    return {"status": "ok", "version": "2.1.0", "endpoints": 40}
 
 if __name__ == "__main__":
     import sys, os

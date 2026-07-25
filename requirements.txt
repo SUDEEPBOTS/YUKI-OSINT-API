@@ -8,3 +8,4 @@ aiohttp==3.10.5
 Pillow==10.4.0
 pycountry==24.6.1
 dnspython==2.6.1
+pyOpenSSL==24.2.1
