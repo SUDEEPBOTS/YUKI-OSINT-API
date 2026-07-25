@@ -107,6 +107,24 @@ body{background:#0a0a0f;color:#e0e0e0;font-family:'Segoe UI',sans-serif;min-heig
 <div class=card><div class=icon>🆔</div><h3>Aadhaar Verify</h3><p>Virtual ID format check</p></div>
 <div class=card><div class=icon>🔧</div><h3>URL Shorten</h3><p>Shorten long URLs</p></div>
 <div class=card><div class=icon>📸</div><h3>Screenshot</h3><p>Website screenshot</p></div>
+<!-- Advanced v2.1.0 -->
+<div class=card><div class=icon>🌐</div><h3>Hosting Detect</h3><p>Website platform/ASN detection</p></div>
+<div class=card><div class=icon>🔍</div><h3>Subdomain</h3><p>DNS subdomain finder</p></div>
+<div class=card><div class=icon>🔒</div><h3>SSL Check</h3><p>SSL certificate expiry checker</p></div>
+<div class=card><div class=icon>#️⃣</div><h3>Hash Tool</h3><p>MD5/SHA1/SHA256/SHA512 generator</p></div>
+<div class=card><div class=icon>⏳</div><h3>Wayback</h3><p>Wayback Machine URL history</p></div>
+<div class=card><div class=icon>🐙</div><h3>GitHub User</h3><p>Public GitHub profile info</p></div>
+<div class=card><div class=icon>📋</div><h3>HTTP Headers</h3><p>Security & server headers check</p></div>
+<div class=card><div class=icon>📱</div><h3>QR Code</h3><p>QR code generator</p></div>
+<div class=card><div class=icon>🌍</div><h3>Translate</h3><p>Text translation (free API)</p></div>
+<div class=card><div class=icon>💱</div><h3>Currency</h3><p>Currency converter</p></div>
+<div class=card><div class=icon>🤖</div><h3>UA Parser</h3><p>User-Agent string parser</p></div>
+<div class=card><div class=icon>🔐</div><h3>Base64</h3><p>Base64 encode/decode</p></div>
+<div class=card><div class=icon>🔌</div><h3>Port Scan</h3><p>Common port scanner</p></div>
+<div class=card><div class=icon>📅</div><h3>Domain Age</h3><p>Domain creation date check</p></div>
+<div class=card><div class=icon>🔑</div><h3>Password Check</h3><p>Password strength checker</p></div>
+<div class=card><div class=icon>📡</div><h3>IP Range</h3><p>CIDR subnet calculator</p></div>
+<div class=card><div class=icon>🆔</div><h3>UUID</h3><p>UUID v4 generator</p></div>
 </div>
 <p style=text-align:center;margin-top:30px>
 <a href=/docs style='color:#4a88d4;font-size:1.1em'>📘 API Documentation →</a>
