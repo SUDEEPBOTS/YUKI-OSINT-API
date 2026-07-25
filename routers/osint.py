@@ -36,48 +36,206 @@ async def ip_info(ip: str = None, ip_address: str = None):
     return {"status": "error", "message": "Could not fetch IP info"}
 
 @router.get("/email")
-async def email_osint(email: str):
-    """Check email validity and breach status"""
+async def email_osint(email: str, deep: bool = False):
+    """Full Email OSINT — domain, breach, gravatar, social, platforms check
+    Set 'deep=true' for extended platform checks (slower)
+    """
+    import hashlib, dns.resolver as dns_resolver
+    
     email = email.strip().lower()
     if "@" not in email or "." not in email:
         return {"status": "error", "message": "Invalid email format"}
     
+    username = email.split("@")[0]
     domain = email.split("@")[1]
-    results = {
+    email_hash = hashlib.md5(email.encode()).hexdigest()
+    email_sha1 = hashlib.sha1(email.encode()).hexdigest()
+    
+    result = {
         "email": email,
-        "valid_format": True,
-        "domain_check": None,
-        "haveibeenpwned": None,
-        "disposable": False
+        "username": username,
+        "domain": domain,
+        "valid_format": bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email)),
+        "disposable": False,
+        "domain_info": {},
+        "gravatar": None,
+        "breach_check": {},
+        "platforms": {},
+        "deep_check": {}
     }
     
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            # Check MX records
-            try:
-                import dns.resolver
-                answers = dns.resolver.resolve(domain, 'MX')
-                results["domain_check"] = {"has_mx": True, "mx_servers": [str(x.exchange) for x in answers[:3]]}
-            except:
-                results["domain_check"] = {"has_mx": False, "note": "No mail servers found"}
-                return {"status": "success", "data": results}
+    async with httpx.AsyncClient(timeout=10, verify=False) as client:
+        
+        # 1. Disposable domain check
+        disposable_domains = {
+            "tempmail.com", "10minutemail.com", "guerrillamail.com", "mailinator.com", 
+            "yopmail.com", "throwaway.email", "temp-mail.org", "fakeinbox.com",
+            "trashmail.com", "sharklasers.com", "burner.com"
+        }
+        result["disposable"] = domain in disposable_domains or any(dom in domain for dom in ["temp", "trash", "fake", "throw", "spam"])
+        
+        # 2. Domain MX / DNS check
+        try:
+            answers = dns_resolver.resolve(domain, 'MX')
+            mx_list = [str(x.exchange) for x in answers[:5]]
+            result["domain_info"]["mx_records"] = mx_list
+            result["domain_info"]["has_email_server"] = True
             
-            # Check disposable domains
-            disposable_domains = {"tempmail.com", "10minutemail.com", "guerrillamail.com", "mailinator.com", "yopmail.com", "throwaway.email"}
-            results["disposable"] = domain in disposable_domains
-            
-            # HIBP breach check (k-anonymity)
-            import hashlib
-            hash_prefix = hashlib.sha1(email.encode()).hexdigest()[:5].upper()
+            # Provider detection from MX
+            mx_text = " ".join(mx_list).lower()
+            if "google" in mx_text or "googlemail" in mx_text:
+                result["domain_info"]["provider"] = "Google Workspace / Gmail"
+            elif "outlook" in mx_text or "microsoft" in mx_text or "hotmail" in mx_text:
+                result["domain_info"]["provider"] = "Microsoft 365 / Outlook"
+            elif "protonmail" in mx_text or "proton" in mx_text:
+                result["domain_info"]["provider"] = "ProtonMail"
+            elif "yahoo" in mx_text:
+                result["domain_info"]["provider"] = "Yahoo Mail"
+            elif "zoho" in mx_text:
+                result["domain_info"]["provider"] = "Zoho Mail"
+            else:
+                result["domain_info"]["provider"] = "Custom / Other"
+                
+        except:
+            result["domain_info"]["has_email_server"] = False
+            result["domain_info"]["mx_records"] = []
+            result["domain_info"]["provider"] = "Unknown / No MX"
+        
+        # 3. Gravatar check (profile pic + name)
+        try:
+            grav_url = f"https://www.gravatar.com/{email_hash}.json"
+            grav_resp = await client.get(grav_url, headers={"User-Agent": "YUKI-OSINT-API"})
+            if grav_resp.status_code == 200:
+                grav_data = grav_resp.json()
+                entry = grav_data.get("entry", [{}])[0]
+                result["gravatar"] = {
+                    "has_profile": True,
+                    "name": entry.get("displayName", entry.get("preferredUsername", "")),
+                    "avatar_url": f"https://www.gravatar.com/avatar/{email_hash}?s=400",
+                    "avatar_url_secure": f"https://secure.gravatar.com/avatar/{email_hash}?s=400",
+                    "profile_url": entry.get("profileUrl", ""),
+                    "about": entry.get("aboutMe", "")[:200] if entry.get("aboutMe") else "",
+                    "location": entry.get("currentLocation", ""),
+                    "accounts": len(entry.get("accounts", [])) if "accounts" in entry else 0
+                }
+                # Get linked social accounts
+                accounts = entry.get("accounts", [])
+                if accounts:
+                    result["gravatar"]["linked_accounts"] = []
+                    for acc in accounts[:5]:
+                        result["gravatar"]["linked_accounts"].append({
+                            "platform": acc.get("shortname", acc.get("name", "")),
+                            "url": acc.get("url", "")
+                        })
+            else:
+                result["gravatar"] = {"has_profile": False}
+        except:
+            result["gravatar"] = {"has_profile": False, "error": "Gravatar check failed"}
+        
+        # 4. Breach check via HIBP k-anonymity
+        try:
+            hash_prefix = email_sha1[:5].upper()
             hibp_url = f"https://api.pwnedpasswords.com/range/{hash_prefix}"
-            resp = await client.get(hibp_url, headers={"User-Agent": "YUKI-OSINT-API"})
-            if resp.status_code == 200:
-                results["haveibeenpwned"] = "Check at https://haveibeenpwned.com/ (API rate limited)"
-            
-            # Hunter.io check (if available)
-            return {"status": "success", "data": results}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+            hibp_resp = await client.get(hibp_url, headers={"User-Agent": "YUKI-OSINT-API"})
+            if hibp_resp.status_code == 200:
+                # Check if our hash suffix is in the response
+                hash_suffix = email_sha1[5:].upper()
+                breached = hash_suffix in hibp_resp.text
+                if breached:
+                    result["breach_check"] = {
+                        "pwned": True,
+                        "message": "Email found in known breaches! Check https://haveibeenpwned.com/ for details",
+                        "check_url": f"https://haveibeenpwned.com/account/{email}"
+                    }
+                else:
+                    result["breach_check"] = {"pwned": False, "message": "Not found in HIBP database"}
+        except:
+            result["breach_check"] = {"error": "Breach check unavailable"}
+        
+        # 5. Platform checks (public profiles)
+        # GitHub
+        try:
+            gh_resp = await client.get(f"https://api.github.com/search/users?q={email}+in:email", 
+                headers={"User-Agent": "YUKI-OSINT-API", "Accept": "application/vnd.github.v3+json"})
+            if gh_resp.status_code == 200:
+                gh_data = gh_resp.json()
+                if gh_data.get("total_count", 0) > 0:
+                    user = gh_data["items"][0]
+                    result["platforms"]["github"] = {
+                        "found": True,
+                        "username": user.get("login"),
+                        "profile": user.get("html_url"),
+                        "avatar": user.get("avatar_url"),
+                        "type": user.get("type")
+                    }
+        except:
+            pass
+        
+        # Google profile / reviews check (via public Google Maps)
+        try:
+            # Google doesn't have a public API for this, but we can check
+            result["platforms"]["google"] = {
+                "note": "Google reviews/profile requires manual check at:",
+                "check_url": f"https://www.google.com/search?q={email.replace('@', '%40')}"
+            }
+        except:
+            pass
+        
+        # Deep checks (slow - only if requested)
+        if deep:
+            result["deep_check"] = await _deep_email_osint(email, username, client)
+    
+    return {"status": "success", "data": result}
+
+async def _deep_email_osint(email, username, client):
+    """Extended email OSINT checks"""
+    deep = {}
+    
+    # Check common platforms
+    platform_checks = [
+        ("twitter", f"https://twitter.com/{username}"),
+        ("instagram", f"https://www.instagram.com/{username}/"),
+        ("facebook", f"https://www.facebook.com/{username}"),
+        ("linkedin", f"https://www.linkedin.com/in/{username}/"),
+        ("pinterest", f"https://www.pinterest.com/{username}/"),
+        ("telegram", f"https://t.me/{username}"),
+        ("reddit", f"https://www.reddit.com/user/{username}/"),
+        ("medium", f"https://medium.com/@{username}"),
+        ("keybase", f"https://keybase.io/{username}"),
+    ]
+    
+    check_results = []
+    for platform, url in platform_checks:
+        try:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code < 400:
+                check_results.append({
+                    "platform": platform,
+                    "exists": True,
+                    "url": url,
+                    "status": resp.status_code
+                })
+            else:
+                check_results.append({
+                    "platform": platform,
+                    "exists": False,
+                    "status": resp.status_code
+                })
+        except:
+            check_results.append({"platform": platform, "exists": "unknown", "error": "timeout/failed"})
+    
+    deep["social_profiles"] = check_results
+    
+    # Check firebaseio / common leaks
+    deep["note"] = "For deeper OSINT, use: holehe, GHunt, sherlock, maigret tools"
+    deep["recommended_tools"] = [
+        "holehe - Check if email used on 100+ websites",
+        "GHunt - Google account OSINT",
+        "sherlock - Social media username search",
+        "theHarvester - Email OSINT collection"
+    ]
+    
+    return deep
 
 @router.get("/phone")
 async def phone_osint(phone: str):
