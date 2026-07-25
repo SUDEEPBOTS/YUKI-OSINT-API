@@ -2,16 +2,60 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 import uvicorn, os, time
+from collections import defaultdict
+from datetime import datetime, timedelta
 
 app = FastAPI(
     title="YUKI OSINT API",
-    description="25+ Legal Intelligence & Data Lookup Tools — Vehicle, PAN, GST, Voter, UPI, IP, Email & more",
-    version="2.0.0",
+    description="40+ Legal Intelligence & Data Lookup Tools — Vehicle, PAN, GST, Voter, UPI, IP, Email & more",
+    version="2.1.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
 
+# Rate limiting
+rate_limit_store = defaultdict(list)
+RATE_LIMIT = 30  # requests per window
+RATE_WINDOW = 60  # seconds
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window_start = now - RATE_WINDOW
+    
+    # Clean old entries
+    rate_limit_store[client_ip] = [t for t in rate_limit_store[client_ip] if t > window_start]
+    
+    # Check limit
+    if len(rate_limit_store[client_ip]) >= RATE_LIMIT:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "status": "error",
+                "message": f"Rate limit exceeded. {RATE_LIMIT} requests per {RATE_WINDOW}s. Try again later.",
+                "retry_after": RATE_WINDOW,
+                "limit": RATE_LIMIT
+            }
+        )
+    
+    # Add current request
+    rate_limit_store[client_ip].append(now)
+    
+    # Process request
+    response = await call_next(request)
+    
+    # Add rate limit headers
+    remaining = RATE_LIMIT - len(rate_limit_store[client_ip])
+    response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT)
+    response.headers["X-RateLimit-Remaining"] = str(max(0, remaining))
+    response.headers["X-RateLimit-Reset"] = str(int(window_start + RATE_WINDOW))
+    
+    return response
+
+# CORS setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

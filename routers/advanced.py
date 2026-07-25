@@ -4,7 +4,9 @@ from datetime import datetime
 
 router = APIRouter()
 
-# ─── DNS Subdomain Finder ───
+import asyncio
+
+# ─── DNS Subdomain Finder (with alive check) ───
 COMMON_SUBDOMAINS = [
     "www", "mail", "api", "admin", "blog", "dev", "test", "static",
     "cdn", "app", "web", "staging", "vpn", "smtp", "pop", "imap",
@@ -15,29 +17,78 @@ COMMON_SUBDOMAINS = [
     "media", "images", "img", "assets", "js", "css", "upload"
 ]
 
+async def check_alive(domain: str, timeout: float = 3.0) -> dict:
+    """Check if subdomain responds to HTTP/HTTPS"""
+    result = {"alive": False, "http_status": None, "method": None, "response_time_ms": None}
+    
+    import time
+    start = time.time()
+    
+    async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+        for protocol in ["https", "http"]:
+            try:
+                resp = await client.get(f"{protocol}://{domain}", 
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"},
+                    follow_redirects=False)
+                elapsed = round((time.time() - start) * 1000)
+                result["alive"] = True
+                result["http_status"] = resp.status_code
+                result["method"] = protocol
+                result["response_time_ms"] = elapsed
+                result["server"] = resp.headers.get("server", resp.headers.get("via", ""))
+                break
+            except:
+                continue
+    
+    return result
+
 @router.get("/subdomain")
-async def subdomain_finder(domain: str, limit: int = 20):
-    """Find common subdomains via DNS resolution"""
+async def subdomain_finder(domain: str, limit: int = 20, check_alive_endpoint: bool = True):
+    """Find common subdomains with alive check. 
+    Set 'check_alive_endpoint=false' to skip HTTP checking for faster results.
+    """
     domain = domain.strip().lower()
     if not domain or "." not in domain:
         return {"status": "error", "message": "Invalid domain"}
     
+    # Limit max
+    if limit > 50: limit = 50
+    if limit < 1: limit = 10
+    
     found = []
     checked = min(limit, len(COMMON_SUBDOMAINS))
+    checked_list = COMMON_SUBDOMAINS[:checked]
     
-    for sub in COMMON_SUBDOMAINS[:checked]:
+    for sub in checked_list:
         full = f"{sub}.{domain}"
         try:
             ip = socket.gethostbyname(full)
-            found.append({"subdomain": sub, "domain": full, "ip": ip})
+            entry = {"subdomain": sub, "domain": full, "ip": ip, "alive": False, "http_status": None}
+            
+            if check_alive_endpoint:
+                try:
+                    alive_check = await check_alive(full)
+                    entry["alive"] = alive_check["alive"]
+                    entry["http_status"] = alive_check["http_status"]
+                    entry["response_time_ms"] = alive_check["response_time_ms"]
+                except:
+                    pass
+            
+            found.append(entry)
         except:
             pass
+    
+    # Summary
+    alive_count = sum(1 for s in found if s["alive"])
+    dead_count = sum(1 for s in found if not s["alive"])
     
     return {
         "status": "success",
         "domain": domain,
         "checked": checked,
         "found": len(found),
+        "alive": alive_count,
+        "dead": dead_count,
         "subdomains": found
     }
 
