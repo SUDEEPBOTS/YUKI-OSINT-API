@@ -119,5 +119,10 @@ async def health():
     return {"status": "ok", "version": "2.0.0", "endpoints": 25}
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
+    import sys
+    port = 8000
+    for i, arg in enumerate(sys.argv):
+        if arg == "--port" and i + 1 < len(sys.argv):
+            port = int(sys.argv[i + 1])
+    port = int(os.getenv("PORT", port))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
