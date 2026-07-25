@@ -19,7 +19,7 @@ COMMON_SUBDOMAINS = [
 
 async def check_alive(domain: str, timeout: float = 3.0) -> dict:
     """Check if subdomain responds to HTTP/HTTPS"""
-    result = {"alive": False, "http_status": None, "method": None, "response_time_ms": None}
+    result = {"alive": False, "http_status": None, "method": None, "response_time_ms": None, "real_service": False}
     
     import time
     start = time.time()
@@ -36,6 +36,19 @@ async def check_alive(domain: str, timeout: float = 3.0) -> dict:
                 result["method"] = protocol
                 result["response_time_ms"] = elapsed
                 result["server"] = resp.headers.get("server", resp.headers.get("via", ""))
+                
+                # Cloudflare 530 = proxied but NO backend service (fake alive)
+                if resp.status_code == 530:
+                    result["real_service"] = False
+                    result["alive_label"] = "cloudflare_proxy"
+                # 200-399 = real service
+                elif 200 <= resp.status_code < 400:
+                    result["real_service"] = True
+                    result["alive_label"] = "alive"
+                # 4xx/5xx but actual server responded (real but erroring)
+                else:
+                    result["real_service"] = True
+                    result["alive_label"] = "error"
                 break
             except:
                 continue
@@ -59,11 +72,29 @@ async def subdomain_finder(domain: str, limit: int = 20, check_alive_endpoint: b
     checked = min(limit, len(COMMON_SUBDOMAINS))
     checked_list = COMMON_SUBDOMAINS[:checked]
     
+    # Always check the bare/main domain first (@)
+    try:
+        ip_main = socket.gethostbyname(domain)
+        entry = {"subdomain": "@", "domain": domain, "ip": ip_main, "alive": False, "http_status": None, "real_service": False}
+        if check_alive_endpoint:
+            try:
+                alive_check = await check_alive(domain)
+                entry["alive"] = alive_check["alive"]
+                entry["http_status"] = alive_check["http_status"]
+                entry["response_time_ms"] = alive_check["response_time_ms"]
+                entry["real_service"] = alive_check["real_service"]
+                entry["alive_label"] = alive_check.get("alive_label", "unknown")
+            except:
+                pass
+        found.append(entry)
+    except:
+        pass
+    
     for sub in checked_list:
         full = f"{sub}.{domain}"
         try:
             ip = socket.gethostbyname(full)
-            entry = {"subdomain": sub, "domain": full, "ip": ip, "alive": False, "http_status": None}
+            entry = {"subdomain": sub, "domain": full, "ip": ip, "alive": False, "http_status": None, "real_service": False}
             
             if check_alive_endpoint:
                 try:
@@ -71,6 +102,8 @@ async def subdomain_finder(domain: str, limit: int = 20, check_alive_endpoint: b
                     entry["alive"] = alive_check["alive"]
                     entry["http_status"] = alive_check["http_status"]
                     entry["response_time_ms"] = alive_check["response_time_ms"]
+                    entry["real_service"] = alive_check["real_service"]
+                    entry["alive_label"] = alive_check.get("alive_label", "unknown")
                 except:
                     pass
             
@@ -78,16 +111,18 @@ async def subdomain_finder(domain: str, limit: int = 20, check_alive_endpoint: b
         except:
             pass
     
-    # Summary
-    alive_count = sum(1 for s in found if s["alive"])
-    dead_count = sum(1 for s in found if not s["alive"])
+    # Summary with real_service detection (530 = cloudflare proxy, not real)
+    alive_real = sum(1 for s in found if s.get("real_service"))
+    cloudflare_proxy = sum(1 for s in found if s.get("alive_label") == "cloudflare_proxy")
+    dead_count = sum(1 for s in found if not s.get("alive"))
     
     return {
         "status": "success",
         "domain": domain,
-        "checked": checked,
+        "checked": checked + 1,  # +1 for the main domain (@)
         "found": len(found),
-        "alive": alive_count,
+        "alive_real_services": alive_real,
+        "cloudflare_proxied_only": cloudflare_proxy,
         "dead": dead_count,
         "subdomains": found
     }
